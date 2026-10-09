@@ -13,6 +13,14 @@ import {
 import { playback } from './state/playback';
 import { parseProjectFile, projectSnapshot, serializeProject, type OpenedMedia } from './state/projectFile';
 import { computePeaks, createMediaItem, folderOf, restoreMediaItem } from './utils/media';
+import { buildExportPlan } from './utils/exportPlan';
+import {
+  loadAutoSubtitleSettings,
+  saveAutoSubtitleSettings,
+  type AutoSubtitleSettings,
+} from './utils/autoSubtitle';
+import { useAutoSubtitles } from './state/useAutoSubtitles';
+import SubtitleJobBar from './components/SubtitleJobBar';
 import MediaPanel from './components/MediaPanel';
 import SubtitlePanel from './components/SubtitlePanel';
 import Preview from './components/Preview';
@@ -45,7 +53,6 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>(null);
   const [leftTab, setLeftTab] = useState<LeftTab>('media');
   const [exporting, setExporting] = useState(false);
-  const [autoSubtitleOpen, setAutoSubtitleOpen] = useState(false);
   const [recorderOpen, setRecorderOpen] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [projectPath, setProjectPath] = useState<string | null>(null);
@@ -87,12 +94,69 @@ export default function App() {
         ? (mediaById.get(selectedClip.mediaId) ?? null)
         : null;
 
-  const addMedia = (items: MediaItem[]) => setMedia((prev) => [...prev, ...items]);
   const updateMedia = (id: string, patch: Partial<MediaItem>) =>
     setMedia((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
 
   const fillPeaks = (item: MediaItem, size: number) => {
     computePeaks(item, size).then((peaks) => peaks && updateMedia(item.id, { peaks }));
+  };
+
+  /* ---------- 원클릭 자동 자막 ---------- */
+
+  const autoSubs = useAutoSubtitles(dispatch);
+  /** 자동 자막 설정 창. firstRun: 처음 영상을 넣어서 열린 경우 */
+  const [autoDialog, setAutoDialog] = useState<{ firstRun: boolean } | null>(null);
+  /** 방금 넣은 영상이 타임라인에 반영되면 자막 만들기를 시작한다 */
+  const [pendingAutoStart, setPendingAutoStart] = useState(false);
+
+  const startAutoSubtitles = async (settings: AutoSubtitleSettings) => {
+    saveAutoSubtitleSettings(settings);
+    setAutoDialog(null);
+    let plan;
+    try {
+      // 소리만 쓰므로 해상도는 아무 값이나 괜찮다.
+      plan = buildExportPlan(project, mediaById, { width: 1920, height: 1080, fps: 30, crf: 23 });
+    } catch (e) {
+      alert((e as Error).message);
+      return;
+    }
+    setLeftTab('subtitle');
+    setSelection(null);
+    const status = await window.editorApi.getSttStatus();
+    const firstStep = !status.engine ? 'engine' : !status.models[settings.model] ? 'model' : 'audio';
+    autoSubs.start(plan, settings, firstStep);
+  };
+
+  /** fromImport: 영상을 넣자마자 요청한 경우 (설정에서 꺼 두었으면 시작하지 않는다) */
+  const requestAutoSubtitles = (fromImport: boolean) => {
+    const settings = loadAutoSubtitleSettings();
+    if (!settings.chosen) setAutoDialog({ firstRun: fromImport });
+    else if (!fromImport || settings.autoOnImport) setPendingAutoStart(true);
+  };
+
+  useEffect(() => {
+    if (!pendingAutoStart || project.clips.length === 0) return;
+    if (project.clips.some((c) => !mediaById.has(c.mediaId))) return;
+    setPendingAutoStart(false);
+    startAutoSubtitles(loadAutoSubtitleSettings());
+  }, [pendingAutoStart, project, mediaById]);
+
+  const projectRef = useRef(project);
+  projectRef.current = project;
+
+  /** 파일 가져오기. 빈 프로젝트에 영상을 넣으면 타임라인에 올리고 자막까지 자동으로 만든다. */
+  const importFiles = async (files: File[]) => {
+    const created = (await Promise.all(files.map(createMediaItem))).filter((c) => c !== null);
+    if (created.length === 0) return;
+    const items = created.map((c) => c.item);
+    setMedia((prev) => [...prev, ...items]);
+    created.forEach((c) => fillPeaks(c.item, c.size));
+
+    if (projectRef.current.clips.length > 0) return;
+    const visual = items.filter((m) => m.kind !== 'audio');
+    if (visual.length === 0) return;
+    visual.forEach((m) => dispatch({ type: 'add', clipId: crypto.randomUUID(), media: m }));
+    if (visual.some((m) => m.kind === 'video') && !autoSubs.job) requestAutoSubtitles(true);
   };
 
   const removeMedia = (id: string) => {
@@ -133,13 +197,6 @@ export default function App() {
     setLeftTab('subtitle');
   };
 
-  const applyAutoSubtitles = (subtitles: Subtitle[]) => {
-    dispatch({ type: 'setSubtitles', subtitles });
-    setAutoSubtitleOpen(false);
-    setLeftTab('subtitle');
-    setSelection(null);
-  };
-
   /* ---------- 프로젝트 저장 / 열기 ---------- */
 
   const saveProject = async (saveAs: boolean): Promise<boolean> => {
@@ -175,8 +232,15 @@ export default function App() {
     setSavedSnapshot(projectSnapshot(next, items));
   };
 
+  /** 자막을 만드는 중에 다른 프로젝트로 바꾸면 만들던 자막이 섞여 들어갈 수 있어 막는다. */
+  const busyWithSubtitles = () => {
+    if (!autoSubs.job) return false;
+    alert('자동 자막을 만드는 중이에요. 끝나거나 취소한 뒤에 다시 해 주세요.');
+    return true;
+  };
+
   const newProject = async () => {
-    if (!(await resolveUnsaved())) return;
+    if (busyWithSubtitles() || !(await resolveUnsaved())) return;
     applyLoaded(initialHistory.present, [], null);
   };
 
@@ -207,7 +271,7 @@ export default function App() {
 
   /** filePath 가 없으면 열기 대화상자를 띄운다. */
   const openProject = async (filePath?: string) => {
-    if (!(await resolveUnsaved())) return;
+    if (busyWithSubtitles() || !(await resolveUnsaved())) return;
     const opened = await window.editorApi.openProject(filePath);
     setRecentKey((k) => k + 1);
     if (!opened) return;
@@ -315,7 +379,7 @@ export default function App() {
 
   const deleteSelected = () => {
     if (selectedClip) dispatch({ type: 'remove', clipId: selectedClip.id });
-    else if (selectedSubtitle) dispatch({ type: 'removeSubtitle', id: selectedSubtitle.id });
+    else if (selectedSubtitle && !autoSubs.job) dispatch({ type: 'removeSubtitle', id: selectedSubtitle.id });
     else if (selectedTransitionClip) dispatch({ type: 'setTransition', clipId: selectedTransitionClip.id, transition: null });
     else if (selectedText) dispatch({ type: 'removeText', id: selectedText.id });
     else return;
@@ -325,7 +389,7 @@ export default function App() {
   // 단축키
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (exporting || autoSubtitleOpen || recordingBusy || recovery) return;
+      if (exporting || autoDialog || recordingBusy || recovery) return;
       const ctrl = e.ctrlKey || e.metaKey;
 
       // 저장·열기 단축키는 글자를 입력하는 중에도 동작한다.
@@ -351,7 +415,7 @@ export default function App() {
         playback.toggle();
       } else if (e.code === 'KeyS' && !ctrl) {
         splitAtPlayhead();
-      } else if (e.code === 'KeyT' && !ctrl) {
+      } else if (e.code === 'KeyT' && !ctrl && !autoSubs.job) {
         addSubtitleAt(playback.getTime());
       } else if (e.code === 'Delete' || e.code === 'Backspace') {
         deleteSelected();
@@ -396,6 +460,12 @@ export default function App() {
             {dirty && <span className="dirty">● 저장 안 됨</span>}
           </span>
         </div>
+        <SubtitleJobBar
+          job={autoSubs.job}
+          result={autoSubs.result}
+          onCancel={autoSubs.cancel}
+          onDismiss={autoSubs.dismissResult}
+        />
         <button
           className="btn primary"
           disabled={duration <= 0}
@@ -422,8 +492,7 @@ export default function App() {
             <MediaPanel
               media={media}
               selectedId={selection?.type === 'media' ? selection.id : null}
-              onAdd={addMedia}
-              onUpdate={updateMedia}
+              onImport={importFiles}
               onSelect={(id) => setSelection({ type: 'media', id })}
               onRemove={removeMedia}
               onAddToTimeline={addToTimeline}
@@ -438,16 +507,20 @@ export default function App() {
               onAddAtPlayhead={() => addSubtitleAt(playback.getTime())}
               onOpenAuto={() => {
                 playback.pause();
-                setAutoSubtitleOpen(true);
+                setAutoDialog({ firstRun: false });
               }}
+              busy={!!autoSubs.job}
             />
           )}
         </div>
         <Preview
           project={project}
           media={mediaById}
+          onDropFiles={importFiles}
           emptyContent={
-            media.length === 0 ? <RecentStart refreshKey={recentKey} onOpen={(p) => openProject(p)} /> : undefined
+            media.length === 0 ? (
+              <RecentStart refreshKey={recentKey} onOpen={(p) => openProject(p)} onPickFiles={importFiles} />
+            ) : undefined
           }
           selectedTextId={selectedText?.id ?? null}
           onSelectText={(id) => setSelection(id ? { type: 'text', id } : null)}
@@ -520,12 +593,14 @@ export default function App() {
 
       {exporting && <ExportDialog project={project} media={mediaById} onClose={() => setExporting(false)} />}
 
-      {autoSubtitleOpen && (
+      {autoDialog && (
         <AutoSubtitleDialog
           project={project}
           media={mediaById}
-          onDone={applyAutoSubtitles}
-          onClose={() => setAutoSubtitleOpen(false)}
+          initial={loadAutoSubtitleSettings()}
+          firstRun={autoDialog.firstRun}
+          onStart={startAutoSubtitles}
+          onClose={() => setAutoDialog(null)}
         />
       )}
 

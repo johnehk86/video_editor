@@ -1,14 +1,13 @@
 import { useRef, useState } from 'react';
 import type { MediaItem } from '../types';
-import { ACCEPTED_TYPES, computePeaks, createMediaItem, formatTime } from '../utils/media';
+import { ACCEPTED_TYPES, formatTime } from '../utils/media';
 import { MEDIA_DRAG_TYPE } from './Timeline';
 
 interface Props {
   media: MediaItem[];
   selectedId: string | null;
-  onAdd: (items: MediaItem[]) => void;
-  /** 음파 계산이 끝나면 나중에 채워 넣는다 */
-  onUpdate: (id: string, patch: Partial<MediaItem>) => void;
+  /** 파일 가져오기 (빈 프로젝트면 타임라인에 올리고 자동 자막까지) */
+  onImport: (files: File[]) => Promise<void>;
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
   onAddToTimeline: (id: string) => void;
@@ -18,7 +17,7 @@ interface Props {
 
 const KIND_ICON = { video: '🎞️', audio: '🎵', image: '🖼️' } as const;
 
-export default function MediaPanel({ media, selectedId, onAdd, onUpdate, onSelect, onRemove, onAddToTimeline, onRelink }: Props) {
+export default function MediaPanel({ media, selectedId, onImport, onSelect, onRemove, onAddToTimeline, onRelink }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const relinkRef = useRef<HTMLInputElement>(null);
   const relinkTarget = useRef<string | null>(null);
@@ -34,11 +33,10 @@ export default function MediaPanel({ media, selectedId, onAdd, onUpdate, onSelec
   const importFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setLoading(true);
-    const created = (await Promise.all(Array.from(files).map(createMediaItem))).filter((c) => c !== null);
-    onAdd(created.map((c) => c.item));
-    setLoading(false);
-    for (const { item, size } of created) {
-      computePeaks(item, size).then((peaks) => peaks && onUpdate(item.id, { peaks }));
+    try {
+      await onImport(Array.from(files));
+    } finally {
+      setLoading(false);
     }
   };
 

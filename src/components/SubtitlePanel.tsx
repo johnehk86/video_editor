@@ -12,6 +12,8 @@ interface Props {
   onSelect: (id: string) => void;
   onAddAtPlayhead: () => void;
   onOpenAuto: () => void;
+  /** 자동 자막을 만드는 중: 새 자막을 따라 내려가고, 고치지 못하게 잠근다 */
+  busy: boolean;
 }
 
 /** 재생 위치의 자막 id. 바뀔 때만 다시 그리도록 id만 구독한다. */
@@ -22,14 +24,14 @@ function useActiveSubtitleId(subtitles: Subtitle[]) {
   });
 }
 
-export default function SubtitlePanel({ subtitles, selectedId, dispatch, onSelect, onAddAtPlayhead, onOpenAuto }: Props) {
+export default function SubtitlePanel({ subtitles, selectedId, dispatch, onSelect, onAddAtPlayhead, onOpenAuto, busy }: Props) {
   const activeId = useActiveSubtitleId(subtitles);
   const playing = usePlaying();
   const listRef = useRef<HTMLUListElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // 재생 중에는 지금 나오는 자막을, 선택이 바뀌면 선택한 자막을 보이게 스크롤한다.
-  const followId = playing ? activeId : selectedId;
+  const followId = busy ? subtitles[subtitles.length - 1]?.id : playing ? activeId : selectedId;
   useEffect(() => {
     if (!followId) return;
     listRef.current?.querySelector(`[data-id="${followId}"]`)?.scrollIntoView({ block: 'nearest' });
@@ -56,22 +58,22 @@ export default function SubtitlePanel({ subtitles, selectedId, dispatch, onSelec
     <div className="panel subtitle-panel">
       <div className="panel-header">
         <h2>자막 {subtitles.length > 0 && <span className="muted-count">{subtitles.length}</span>}</h2>
-        <button className="btn" onClick={onAddAtPlayhead} title="재생헤드 위치에 자막 추가">
+        <button className="btn" onClick={onAddAtPlayhead} disabled={busy} title="재생헤드 위치에 자막 추가">
           + 추가
         </button>
       </div>
 
       <div className="sub-toolbar">
-        <button className="btn primary sub-auto" onClick={onOpenAuto}>
+        <button className="btn primary sub-auto" onClick={onOpenAuto} disabled={busy}>
           🤖 자동 자막 만들기
         </button>
         <div className="sub-file-actions">
-          <button className="btn" onClick={() => fileRef.current?.click()}>
+          <button className="btn" onClick={() => fileRef.current?.click()} disabled={busy}>
             SRT 불러오기
           </button>
           <button
             className="btn"
-            disabled={subtitles.length === 0}
+            disabled={busy || subtitles.length === 0}
             onClick={() => window.editorApi.saveSrt(toSrt(subtitles))}
           >
             SRT 저장
@@ -91,8 +93,14 @@ export default function SubtitlePanel({ subtitles, selectedId, dispatch, onSelec
 
       {subtitles.length === 0 ? (
         <div className="empty-drop">
-          <p>🤖 자동 자막으로 만들거나</p>
-          <p>+ 추가 / 타임라인 자막 줄 더블클릭</p>
+          {busy ? (
+            <p>🤖 말소리를 듣고 있어요. 자막이 곧 채워져요…</p>
+          ) : (
+            <>
+              <p>🤖 자동 자막으로 만들거나</p>
+              <p>+ 추가 / 타임라인 자막 줄 더블클릭</p>
+            </>
+          )}
         </div>
       ) : (
         <ul className="sub-list" ref={listRef}>
@@ -109,6 +117,7 @@ export default function SubtitlePanel({ subtitles, selectedId, dispatch, onSelec
                 </button>
                 <button
                   className="sub-remove"
+                  disabled={busy}
                   title="자막 삭제"
                   onClick={() => dispatch({ type: 'removeSubtitle', id: s.id })}
                 >
@@ -116,6 +125,7 @@ export default function SubtitlePanel({ subtitles, selectedId, dispatch, onSelec
                 </button>
               </div>
               <textarea
+                readOnly={busy}
                 value={s.text}
                 rows={2}
                 placeholder="자막 내용을 입력하세요"

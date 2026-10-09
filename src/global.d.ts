@@ -20,6 +20,7 @@ interface Window {
     onSttProgress: (
       callback: (p: { phase: 'engine' | 'model' | 'audio' | 'recognize'; progress: number }) => void,
     ) => () => void;
+    onSttSegment: (callback: (segment: { start: number; end: number; text: string }) => void) => () => void;
     saveSrt: (content: string) => Promise<string | null>;
     saveProject: (request: {
       data: import('./state/projectFile').ProjectFileData;

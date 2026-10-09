@@ -3,6 +3,7 @@
 // Electron에 의존하지 않으므로 node로 단독 테스트할 수 있다.
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
+const { StringDecoder } = require('node:string_decoder');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -65,19 +66,32 @@ async function download(url, dest, onProgress, signal) {
   fs.renameSync(part, dest);
 }
 
-/** 프로그램을 실행하고 끝날 때까지 기다린다. onLine으로 출력 줄을 받는다. */
+/**
+ * 프로그램을 실행하고 끝날 때까지 기다린다. onLine으로 출력을 한 줄씩 받는다.
+ * 출력 조각이 줄 중간이나 한글 글자 중간에서 끊겨 와도 온전한 줄로 이어 붙인다.
+ */
 function run(file, args, job, onLine) {
   return new Promise((resolve, reject) => {
     const proc = spawn(file, args, { windowsHide: true });
     job.kill = () => proc.kill();
     let tail = '';
-    const onData = (chunk) => {
-      const text = String(chunk);
-      tail = (tail + text).slice(-3000);
-      text.split(/\r?\n/).forEach((l) => onLine?.(l));
+    const watch = (stream) => {
+      const decoder = new StringDecoder('utf8');
+      let pending = '';
+      stream.on('data', (chunk) => {
+        const text = decoder.write(chunk);
+        tail = (tail + text).slice(-3000);
+        pending += text;
+        let i;
+        while ((i = pending.indexOf('\n')) >= 0) {
+          onLine?.(pending.slice(0, i).replace(/\r$/, ''));
+          pending = pending.slice(i + 1);
+        }
+      });
+      stream.on('end', () => pending && onLine?.(pending));
     };
-    proc.stdout.on('data', onData);
-    proc.stderr.on('data', onData);
+    watch(proc.stdout);
+    watch(proc.stderr);
     proc.on('error', reject);
     proc.on('close', (code) => {
       if (job.canceled) reject(canceledError());
@@ -126,9 +140,10 @@ const FRAMES_PER_SECOND = 100; // 10ms 단위로 소리 크기를 잰다
 
 /**
  * whisper는 앞뒤 무음까지 문장에 포함하는 일이 많다.
- * 실제 소리 크기를 보고 각 자막의 시작·끝을 말소리가 있는 곳으로 좁힌다.
+ * 실제 소리 크기를 보고 각 자막의 시작·끝을 말소리가 있는 곳으로 좁히는 함수를 만든다.
+ * (소리는 한 번만 분석해 두고, 문장이 나올 때마다 바로 보정할 수 있게)
  */
-function tightenToSpeech(segments, wavFile, sampleRate = 16000) {
+function createSpeechTightener(wavFile, sampleRate = 16000) {
   const samples = readWavSamples(wavFile);
   const frameLen = sampleRate / FRAMES_PER_SECOND;
   const frames = Math.floor(samples.length / frameLen);
@@ -141,7 +156,7 @@ function tightenToSpeech(segments, wavFile, sampleRate = 16000) {
     max = Math.max(max, rms[i]);
   }
   const threshold = Math.max(0.003, max * 0.05);
-  return segments.map((seg) => {
+  return (seg) => {
     const from = Math.max(0, Math.floor(seg.start * FRAMES_PER_SECOND));
     const to = Math.min(frames, Math.ceil(seg.end * FRAMES_PER_SECOND));
     let first = -1;
@@ -156,7 +171,20 @@ function tightenToSpeech(segments, wavFile, sampleRate = 16000) {
     const start = Math.max(seg.start, first / FRAMES_PER_SECOND - 0.1);
     const end = Math.min(seg.end, (last + 1) / FRAMES_PER_SECOND + 0.15);
     return end - start >= 0.3 ? { ...seg, start, end } : seg;
-  });
+  };
+}
+
+/** whisper-cli 가 문장을 끝낼 때마다 찍는 줄: [00:01:02.340 --> 00:01:05.120]   문장 */
+const SEGMENT_LINE = /^\[(\d+):(\d{2}):(\d{2}\.\d+) --> (\d+):(\d{2}):(\d{2}\.\d+)\]\s*(.*)$/;
+
+function parseSegmentLine(line) {
+  const m = SEGMENT_LINE.exec(line.trim());
+  if (!m) return null;
+  const sec = (h, mm, s) => Number(h) * 3600 + Number(mm) * 60 + Number(s);
+  const text = m[7].trim();
+  const start = sec(m[1], m[2], m[3]);
+  const end = sec(m[4], m[5], m[6]);
+  return text && end > start ? { start, end, text } : null;
 }
 
 /**
@@ -165,9 +193,10 @@ function tightenToSpeech(segments, wavFile, sampleRate = 16000) {
  * @param model 'base' | 'small' | 'turbo'
  * @param language 'ko' | 'en' | 'ja' | 'auto' ...
  * @param onProgress ({ phase: 'engine'|'model'|'audio'|'recognize', progress: 0~1 })
- * @returns [{ start, end, text }] (초)
+ * @param onSegment 문장이 인식될 때마다 바로 ({ start, end, text }) — 화면에 실시간으로 채우는 용도
+ * @returns 최종 문장 목록 [{ start, end, text }] (초)
  */
-async function transcribe({ plan, model, language }, onProgress) {
+async function transcribe({ plan, model, language }, onProgress, onSegment) {
   if (current) throw new Error('이미 자막을 만들고 있습니다.');
   if (!MODELS[model]) throw new Error(`알 수 없는 모델: ${model}`);
   const job = { canceled: false, abort: new AbortController(), kill: () => {} };
@@ -188,6 +217,7 @@ async function transcribe({ plan, model, language }, onProgress) {
     if (job.canceled) throw canceledError();
 
     onProgress({ phase: 'recognize', progress: 0 });
+    const tighten = createSpeechTightener(wav);
     const threads = Math.max(1, Math.min(8, os.cpus().length - 1));
     const outBase = path.join(work, 'result');
     // -ml/-sow: 자막으로 쓰기 좋게 문장을 적당한 길이로 끊는다. -oj: 시간 정보가 있는 JSON
@@ -195,13 +225,16 @@ async function transcribe({ plan, model, language }, onProgress) {
     await run(cliPath(), args, job, (line) => {
       const m = /progress\s*=\s*(\d+)%/.exec(line);
       if (m) onProgress({ phase: 'recognize', progress: Number(m[1]) / 100 });
+      const seg = parseSegmentLine(line);
+      if (seg) onSegment?.(tighten(seg));
     });
 
+    // 최종 결과는 JSON 기준 (화면에 흘려보낸 문장과 내용은 같고, 빠진 줄이 없도록 한 번 더 맞춘다)
     const result = JSON.parse(fs.readFileSync(`${outBase}.json`, 'utf8'));
-    const segments = (result.transcription ?? [])
+    return (result.transcription ?? [])
       .map((seg) => ({ start: seg.offsets.from / 1000, end: seg.offsets.to / 1000, text: String(seg.text).trim() }))
-      .filter((s) => s.text && s.end > s.start);
-    return tightenToSpeech(segments, wav);
+      .filter((s) => s.text && s.end > s.start)
+      .map(tighten);
   } catch (e) {
     if (job.canceled || job.abort.signal.aborted) throw canceledError();
     throw e;

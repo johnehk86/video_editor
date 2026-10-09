@@ -97,12 +97,31 @@ export function RecentMenu({ refreshKey, onOpen }: Props) {
   );
 }
 
-/** 빈 화면에 보여 주는 시작 안내 + 최근 프로젝트 */
-export function RecentStart({ refreshKey, onOpen }: Props) {
+/** 빈 화면에 보여 주는 시작 안내: 영상 넣기(→ 자동 자막) + 최근 프로젝트 */
+export function RecentStart({ refreshKey, onOpen, onPickFiles }: Props & { onPickFiles: (files: File[]) => void }) {
   const { list, reload } = useRecent(refreshKey);
+  const inputRef = useRef<HTMLInputElement>(null);
   return (
     <div className="recent-start">
-      <p>미디어를 아래 타임라인으로 끌어다 놓거나</p>
+      <div className="start-hero">
+        <div className="start-icon">🎬</div>
+        <p className="start-title">영상을 여기에 끌어다 놓으세요</p>
+        <p className="start-sub">타임라인에 올리고 자막까지 자동으로 만들어 드려요</p>
+        <button className="btn primary" onClick={() => inputRef.current?.click()}>
+          영상 파일 선택
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="video/*,audio/*,image/*"
+          multiple
+          hidden
+          onChange={(e) => {
+            if (e.target.files?.length) onPickFiles(Array.from(e.target.files));
+            e.target.value = '';
+          }}
+        />
+      </div>
       {list.length > 0 && (
         <>
           <p className="recent-start-title">최근 프로젝트를 이어서 편집하세요</p>

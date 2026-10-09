@@ -65,7 +65,8 @@ export type ProjectAction =
   /** 오디오 클립을 영상(메인 트랙) 끝에 맞춘다. trim: 자르기/늘리기, loop: 반복해서 채우기 */
   | { type: 'fitToVideo'; clipId: string; mode: 'trim' | 'loop'; sourceLimit: number; idPrefix: string }
   /** 자동 자막·SRT 가져오기로 자막 전체를 바꾼다 */
-  | { type: 'setSubtitles'; subtitles: Subtitle[] }
+  /** live: 자동 자막이 실시간으로 채워지는 중 — 연달아 오는 변경을 실행취소 기록 하나로 묶는다 */
+  | { type: 'setSubtitles'; subtitles: Subtitle[]; live?: boolean }
   | { type: 'addSubtitle'; subtitle: Subtitle }
   | { type: 'updateSubtitle'; id: string; text?: string; start?: number; end?: number }
   | { type: 'removeSubtitle'; id: string }
@@ -330,6 +331,8 @@ function mergeKeyFor(a: ProjectAction): string | undefined {
       return `substyle:${Object.keys(a.patch).join()}`;
     case 'updateText':
       return `text:${a.id}:${Object.keys(a.patch).join()}`;
+    case 'setSubtitles':
+      return a.live ? 'auto-subtitles' : undefined;
     case 'setTransition':
       // 길이 슬라이더를 끄는 동안의 변경을 하나로 묶는다. (종류를 바꾸면 새 기록)
       return a.transition ? `trans:${a.clipId}:${a.transition.type}` : undefined;

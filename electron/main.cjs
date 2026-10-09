@@ -136,7 +136,11 @@ ipcMain.handle('recording:save', async (_event, data) => {
 ipcMain.handle('stt:status', () => transcriber.getStatus());
 ipcMain.handle('stt:start', async (event, request) => {
   try {
-    const segments = await transcriber.transcribe(request, (p) => event.sender.send('stt:progress', p));
+    const segments = await transcriber.transcribe(
+      request,
+      (p) => event.sender.send('stt:progress', p),
+      (seg) => event.sender.send('stt:segment', seg),
+    );
     return { status: 'done', segments };
   } catch (e) {
     return e.canceled ? { status: 'canceled' } : { status: 'error', message: e.message };

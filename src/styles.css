@@ -829,3 +829,48 @@ body {
   padding: 4px 6px;
   font: inherit;
 }
+
+/* 자동 자막 진행 표시 (상단 바 가운데) */
+.job-bar {
+  flex: 0 1 520px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px;
+  padding: 5px 8px 5px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.job-bar.running { border-color: var(--accent); }
+.job-bar.done { border-color: #2ecc71; }
+.job-bar.error, .job-bar.empty { border-color: var(--danger); }
+.job-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-label b { color: var(--accent); }
+.job-progress { width: 90px; height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; flex-shrink: 0; }
+.job-progress-fill { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
+.job-pct { color: var(--muted); font-variant-numeric: tabular-nums; width: 34px; text-align: right; }
+.job-cancel { padding: 2px 10px; font-size: 12px; }
+.job-close { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+.job-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  border-right-color: transparent;
+  animation: job-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes job-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 시작 화면 */
+.start-hero { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.start-icon { font-size: 34px; }
+.start-title { font-size: 16px; color: var(--text); font-weight: 600; }
+.start-sub { color: var(--muted); margin-bottom: 10px !important; }
+.stage.dropping .frame { outline: 3px dashed var(--accent); outline-offset: -8px; }
+.modal-lead { color: var(--accent); margin-top: -6px; }

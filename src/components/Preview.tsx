@@ -14,6 +14,8 @@ interface Props {
   selectedTextId: string | null;
   onSelectText: (id: string | null) => void;
   dispatch: (a: HistoryAction) => void;
+  /** 미리보기 화면에 파일을 끌어다 놓았을 때 */
+  onDropFiles?: (files: File[]) => void;
 }
 
 /** 재생 중 원본 위치가 이만큼 어긋나면 다시 맞춘다 */
@@ -50,7 +52,16 @@ function clipLook(t: number, w?: { in?: TransitionWindow; out?: TransitionWindow
   return look;
 }
 
-export default function Preview({ project, media, emptyContent, selectedTextId, onSelectText, dispatch }: Props) {
+export default function Preview({
+  project,
+  media,
+  emptyContent,
+  selectedTextId,
+  onSelectText,
+  dispatch,
+  onDropFiles,
+}: Props) {
+  const [dropping, setDropping] = useState(false);
   const time = usePlaybackTime();
   const playing = usePlaying();
   const muted = useMuted();
@@ -100,7 +111,21 @@ export default function Preview({ project, media, emptyContent, selectedTextId, 
 
   return (
     <section className="preview">
-      <div className="stage">
+      <div
+        className={`stage ${dropping ? 'dropping' : ''}`}
+        onDragOver={(e) => {
+          if (!onDropFiles || !e.dataTransfer.types.includes('Files')) return;
+          e.preventDefault();
+          setDropping(true);
+        }}
+        onDragLeave={() => setDropping(false)}
+        onDrop={(e) => {
+          if (!onDropFiles || e.dataTransfer.files.length === 0) return;
+          e.preventDefault();
+          setDropping(false);
+          onDropFiles(Array.from(e.dataTransfer.files));
+        }}
+      >
         <div className="frame">
           {project.clips.length === 0 && (
             <div className="stage-empty">{emptyContent ?? '미디어를 아래 타임라인으로 끌어다 놓으세요'}</div>

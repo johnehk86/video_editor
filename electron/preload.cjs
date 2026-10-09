@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld('editorApi', {
     ipcRenderer.on('stt:progress', listener);
     return () => ipcRenderer.removeListener('stt:progress', listener);
   },
+  /** 문장이 인식될 때마다 바로 { start, end, text } */
+  onSttSegment: (callback) => {
+    const listener = (_event, segment) => callback(segment);
+    ipcRenderer.on('stt:segment', listener);
+    return () => ipcRenderer.removeListener('stt:segment', listener);
+  },
   /** SRT 저장 대화상자를 띄우고 저장한 경로(취소하면 null)를 돌려준다 */
   saveSrt: (content) => ipcRenderer.invoke('srt:save', content),
 
