@@ -14,18 +14,31 @@ const WHISPER_BUILD = 'b5454';
 const WHISPER_ZIP_URL = `https://github.com/ggml-org/whisper.cpp/releases/download/${WHISPER_BUILD}/whisper-bin-x64.zip`;
 const MODEL_BASE_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main';
 
+// 압축(q5) 모델: GPU 없는 노트북(i7-1185G7)에서 재 보니 원본과 정확도가 같거나 나으면서 용량은 1/3 수준.
+// legacy: 예전 버전이 받아 둔 원본 모델. 있으면 다시 받지 않고 그대로 쓴다.
 const MODELS = {
-  base: { file: 'ggml-base.bin', bytes: 147951465 },
-  small: { file: 'ggml-small.bin', bytes: 487601967 },
+  base: { file: 'ggml-base-q5_1.bin', bytes: 59707625, legacy: 'ggml-base.bin' },
+  small: { file: 'ggml-small-q5_1.bin', bytes: 190085487, legacy: 'ggml-small.bin' },
   turbo: { file: 'ggml-large-v3-turbo-q5_0.bin', bytes: 574041195 },
 };
+
+// 후보 5개를 비교하는 기본 탐색 대신 하나만 따라가는 단순 탐색: 같은 정확도로 약 1.3~1.4배 빠르다.
+// (무음 건너뛰기 --vad 는 더 빠르지만 자막 시간이 1~4초씩 어긋나서 쓰지 않는다)
+const DECODE_ARGS = ['-bs', '1', '-bo', '1'];
 
 let baseDir = path.join(os.tmpdir(), 'video-editor-whisper');
 let current = null;
 
 const engineDir = () => path.join(baseDir, `whisper-${WHISPER_BUILD}`);
 const cliPath = () => path.join(engineDir(), 'Release', 'whisper-cli.exe');
-const modelPath = (id) => path.join(baseDir, 'models', MODELS[id].file);
+const modelsDir = () => path.join(baseDir, 'models');
+const modelPath = (id) => path.join(modelsDir(), MODELS[id].file);
+
+/** 쓸 수 있는 모델 파일 (새 압축 모델 → 예전 원본 모델 순). 없으면 null */
+function installedModel(id) {
+  const { file, legacy } = MODELS[id];
+  return [file, legacy].filter(Boolean).map((f) => path.join(modelsDir(), f)).find((p) => fs.existsSync(p)) ?? null;
+}
 
 function init(dir) {
   baseDir = dir;
@@ -34,7 +47,7 @@ function init(dir) {
 function getStatus() {
   return {
     engine: fs.existsSync(cliPath()),
-    models: Object.fromEntries(Object.keys(MODELS).map((id) => [id, fs.existsSync(modelPath(id))])),
+    models: Object.fromEntries(Object.keys(MODELS).map((id) => [id, installedModel(id) !== null])),
   };
 }
 
@@ -114,8 +127,9 @@ async function ensureEngine(job, onProgress) {
 }
 
 async function ensureModel(id, job, onProgress) {
+  const existing = installedModel(id);
+  if (existing) return existing;
   const dest = modelPath(id);
-  if (fs.existsSync(dest)) return dest;
   await download(`${MODEL_BASE_URL}/${MODELS[id].file}`, dest, (p) => onProgress({ phase: 'model', progress: p }), job.abort.signal);
   return dest;
 }
@@ -221,7 +235,7 @@ async function transcribe({ plan, model, language }, onProgress, onSegment) {
     const threads = Math.max(1, Math.min(8, os.cpus().length - 1));
     const outBase = path.join(work, 'result');
     // -ml/-sow: 자막으로 쓰기 좋게 문장을 적당한 길이로 끊는다. -oj: 시간 정보가 있는 JSON
-    const args = ['-m', modelFile, '-f', wav, '-l', language, '-t', String(threads), '-ml', '40', '-sow', '-oj', '-of', outBase, '-np', '-pp'];
+    const args = ['-m', modelFile, '-f', wav, '-l', language, '-t', String(threads), '-ml', '40', '-sow', ...DECODE_ARGS, '-oj', '-of', outBase, '-np', '-pp'];
     await run(cliPath(), args, job, (line) => {
       const m = /progress\s*=\s*(\d+)%/.exec(line);
       if (m) onProgress({ phase: 'recognize', progress: Number(m[1]) / 100 });

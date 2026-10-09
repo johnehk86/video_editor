@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { MediaItem, Project } from '../types';
-import type { AutoSubtitleSettings, SttModel } from '../utils/autoSubtitle';
+import {
+  estimateMinutesFor10Min,
+  recommendedModel,
+  type AutoSubtitleSettings,
+  type SttModel,
+} from '../utils/autoSubtitle';
 
 interface Props {
   project: Project;
@@ -15,10 +20,16 @@ interface Props {
 type Status = Awaited<ReturnType<Window['editorApi']['getSttStatus']>>;
 
 const MODELS: { id: SttModel; label: string; size: string; note: string }[] = [
-  { id: 'base', label: '빠름', size: '148MB', note: '짧은 영상을 빨리 확인할 때' },
-  { id: 'small', label: '보통 (추천)', size: '488MB', note: '속도와 정확도의 균형' },
-  { id: 'turbo', label: '가장 정확', size: '574MB', note: '시간이 더 걸리지만 가장 잘 알아들어요' },
+  { id: 'base', label: '빠름', size: '57MB', note: '빠르게 초안을 만들 때' },
+  { id: 'small', label: '보통', size: '181MB', note: '속도와 정확도의 균형' },
+  { id: 'turbo', label: '가장 정확', size: '547MB', note: '오래 걸리지만 가장 잘 알아들어요' },
 ];
+
+/** 예상 시간 문구: "약 2분", "1분 이내" */
+function formatEstimate(minutes: number) {
+  if (minutes < 1) return '1분 이내';
+  return `약 ${Math.round(minutes)}분`;
+}
 
 const LANGUAGES = [
   { id: 'ko', label: '한국어' },
@@ -31,6 +42,7 @@ const LANGUAGES = [
 export default function AutoSubtitleDialog({ project, media, initial, firstRun, onStart, onClose }: Props) {
   const [settings, setSettings] = useState(initial);
   const [status, setStatus] = useState<Status | null>(null);
+  const recommended = recommendedModel();
 
   useEffect(() => {
     window.editorApi.getSttStatus().then(setStatus);
@@ -62,8 +74,13 @@ export default function AutoSubtitleDialog({ project, media, initial, firstRun, 
                 onChange={() => setSettings({ ...settings, model: m.id })}
               />
               <span className="model-text">
-                <strong>{m.label}</strong>
-                <small>{m.note}</small>
+                <strong>
+                  {m.label}
+                  {m.id === recommended && <span className="model-badge">이 PC 추천</span>}
+                </strong>
+                <small>
+                  {m.note} · 10분 영상 {formatEstimate(estimateMinutesFor10Min(m.id))}
+                </small>
               </span>
               <span className="model-size">{status?.models[m.id] ? '✓ 준비됨' : m.size}</span>
             </label>
@@ -93,7 +110,7 @@ export default function AutoSubtitleDialog({ project, media, initial, firstRun, 
         <ul className="modal-bullets">
           <li>자막은 만들어지는 대로 바로바로 채워져요. 기다리는 동안 영상을 봐도 돼요.</li>
           <li>영상 소리와 🎙 녹음 트랙을 듣고, 🎵 배경음악은 빼고 들어요.</li>
-          <li>모든 처리는 이 PC 안에서 하며, 영상은 밖으로 나가지 않아요.</li>
+          <li>모든 처리는 이 PC 안에서 하며, 영상은 밖으로 나가지 않아요. (예상 시간은 PC 성능에 따라 달라요)</li>
           {downloadNote && <li>처음 한 번 {downloadNote}를 내려받아요.</li>}
           {project.subtitles.length > 0 && (
             <li className="warn">

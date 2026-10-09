@@ -874,3 +874,13 @@ body {
 .start-sub { color: var(--muted); margin-bottom: 10px !important; }
 .stage.dropping .frame { outline: 3px dashed var(--accent); outline-offset: -8px; }
 .modal-lead { color: var(--accent); margin-top: -6px; }
+.model-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(25, 195, 195, 0.18);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: middle;
+}
