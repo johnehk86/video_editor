@@ -1,0 +1,11 @@
+{
+  // 설치 파일을 만들 때 electron-builder가 release 폴더 안의 폴더 이름을 바꾸는데,
+  // VS Code가 그 폴더를 감시하고 있으면 Windows에서 잠겨서 실패한다(EPERM).
+  "files.watcherExclude": {
+    "**/release/**": true,
+    "**/dist/**": true
+  },
+  "search.exclude": {
+    "**/release": true
+  }
+}
